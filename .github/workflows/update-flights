@@ -1,0 +1,33 @@
+name: Pipeline SIROS → Supabase
+
+on:
+  schedule:
+    # 4x por dia: 06h, 09h, 12h e 18h (Brasilia = UTC-3)
+    - cron: '0 9,12,15,21 * * *'
+  workflow_dispatch:
+
+jobs:
+  fetch-and-insert:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependencias
+        run: pip install requests supabase
+
+      - name: Buscar SIROS e inserir no Supabase
+        run: python scripts/fetch_flights.py
+        env:
+          AIRPORTS:             ${{ vars.AIRPORTS || 'SBCA,SBGR,SBSP,SBCT,SBGL,SBBR,SBFL,SBPA,SBSV,SBFZ' }}
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
+      # Sem etapa de commit — os dados vao direto ao Supabase
+      # O repositorio so guarda o codigo, nao os dados
