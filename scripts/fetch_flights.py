@@ -4,8 +4,8 @@ Busca voos do dia via API SIROS e insere/atualiza no Supabase.
 Nao salva mais arquivos JSON no repositorio.
 
 Variaveis de ambiente (GitHub Secrets):
-  SUPABASE_URL         -> URL do projeto Supabase (https://jirlkphcjzfgauedfucp.supabase.co)
-  SUPABASE_SERVICE_KEY -> service_role key (eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImppcmxrcGhjanpmZ2F1ZWRmdWNwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTA2OTM3MCwiZXhwIjoyMDk0NjQ1MzcwfQ.lmcDdkAETeeP-rdNj4mXODwrqoDwMQuXixm75ebtjH0)
+  SUPABASE_URL         -> URL do projeto Supabase (ex: https://XXXX.supabase.co)
+  SUPABASE_SERVICE_KEY -> service_role key (acesso total para escrita)
 
 Variaveis de ambiente (GitHub Variables):
   AIRPORTS             -> ICAOs separados por virgula (ex: SBCA,SBGR,SBCT)
@@ -20,8 +20,8 @@ from supabase import create_client
 
 # ── Credenciais Supabase ──────────────────────────────────────────────────────
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://jirlkphcjzfgauedfucp.supabase.co").strip()
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImppcmxrcGhjanpmZ2F1ZWRmdWNwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTA2OTM3MCwiZXhwIjoyMDk0NjQ1MzcwfQ.lmcDdkAETeeP-rdNj4mXODwrqoDwMQuXixm75ebtjH0").strip()
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "").strip()
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     print("[ERRO] SUPABASE_URL e SUPABASE_SERVICE_KEY sao obrigatorios.")
