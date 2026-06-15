@@ -1,0 +1,45 @@
+name: Importar Histórico ANAC/VRA
+
+on:
+  schedule:
+    # Dia 3 de cada mês às 06h BRT (09h UTC)
+    # O VRA do mês anterior fica disponível após os primeiros dias do mês seguinte
+    - cron: '0 9 3 * *'
+  workflow_dispatch:
+    inputs:
+      ano_mes:
+        description: 'Período a importar (formato: YYYY-MM, ex: 2026-04)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: anac-historico-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  importar-vra:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # VRA pode ser grande — timeout maior
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependências
+        run: pip install requests supabase
+
+      - name: Importar VRA histórico
+        run: python scripts/fetch_historico_anac.py
+        env:
+          AIRPORTS:             ${{ vars.AIRPORTS || 'SBCA,SBGR,SBSP,SBCT,SBGL,SBBR,SBFL,SBPA,SBSV,SBFZ' }}
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          ANO_MES:              ${{ github.event.inputs.ano_mes }}
