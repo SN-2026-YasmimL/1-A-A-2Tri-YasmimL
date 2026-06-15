@@ -1,3 +1,111 @@
+"""
+fetch_flights.py — SIROS/ANAC + Supabase v2
+Melhorias aplicadas:
+  - Logs renomeados: "enviados/processados" em vez de "inseridos/atualizados"
+  - Upsert explicado: evita duplicatas via constraint voos_unique
+  - execucoes registra: voos_processados, lotes_enviados, erros
+  - Falha parcial gera status "erro_parcial" e falha o workflow (exit 1)
+  - Falha crítica gera status "erro_critico"
+
+Variáveis de ambiente:
+  SUPABASE_URL         → URL do projeto (GitHub Secret)
+  SUPABASE_SERVICE_KEY → secret key / service_role key (GitHub Secret)
+  AIRPORTS             → ICAOs separados por vírgula (GitHub Variable)
+"""
+
+import json
+import os
+import sys
+from datetime import datetime, timezone, timedelta
+
+import requests
+from supabase import create_client
+
+# ── Credenciais ───────────────────────────────────────────────────────────────
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "").strip()
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("[ERRO CRÍTICO] SUPABASE_URL e SUPABASE_SERVICE_KEY são obrigatórios.")
+    print("              Configure-os como GitHub Secrets no repositório.")
+    sys.exit(1)
+
+db = create_client(SUPABASE_URL, SUPABASE_KEY)
+print(f"Supabase conectado: {SUPABASE_URL}")
+
+# ── Configurações ─────────────────────────────────────────────────────────────
+
+API_BASE     = "https://sas.anac.gov.br/sas/siros_api"
+airports_env = os.environ.get("AIRPORTS", "SBCA")
+AIRPORTS     = [a.strip().upper() for a in airports_env.split(",") if a.strip()]
+LOTE         = 500   # registros por requisição ao Supabase
+
+BRT      = timezone(timedelta(hours=-3))
+hoje     = datetime.now(BRT)
+data_ref = hoje.strftime("%d%m%Y")
+data_iso = hoje.strftime("%Y-%m-%d")
+
+print(f"Data de referência: {hoje.strftime('%d/%m/%Y')} (BRT)")
+print(f"Aeroportos configurados: {', '.join(AIRPORTS)}")
+
+# ── Mapeamentos ───────────────────────────────────────────────────────────────
+
+AIRLINES = {
+    "GLO": "GOL",     "TAM": "LATAM",   "AZU": "Azul",
+    "ONE": "VOEPASS",  "PTB": "Passaredo","TAP": "TAP Portugal",
+    "DAL": "Delta",   "UAL": "United",   "AFR": "Air France",
+    "DLH": "Lufthansa","IBE": "Iberia",  "AAL": "American Airlines",
+    "AVA": "Avianca", "BAW": "British Airways","UAE": "Emirates",
+    "THY": "Turkish Airlines","SKU": "Sky Airline","CMP": "Copa Airlines",
+}
+
+EQUIPAMENTOS = {
+    "A20N":"Airbus A320neo","A21N":"Airbus A321neo","A319":"Airbus A319",
+    "A320":"Airbus A320","A321":"Airbus A321","A332":"Airbus A330-200",
+    "A333":"Airbus A330-300","A339":"Airbus A330-900neo",
+    "A359":"Airbus A350-900","B737":"Boeing 737","B738":"Boeing 737-800",
+    "B38M":"Boeing 737 MAX 8","B748":"Boeing 747-8","B763":"Boeing 767-300",
+    "B77W":"Boeing 777-300ER","B788":"Boeing 787-8","B789":"Boeing 787-9",
+    "E190":"Embraer E190","E195":"Embraer E195","E295":"Embraer E195-E2",
+    "AT76":"ATR 72",
+}
+
+
+def get_airline(icao: str) -> str:
+    return AIRLINES.get((icao or "").strip().upper(), (icao or "").strip() or "?")
+
+
+def get_equip(icao: str) -> str | None:
+    code = (icao or "").strip().upper()
+    return EQUIPAMENTOS.get(code, code or None)
+
+
+def get_tipo_operacao(ds: str) -> str:
+    return "Internacional" if "INTERNAC" in (ds or "").upper() else "Doméstico"
+
+
+def parse_siros_dt(dt_str: str) -> str | None:
+    """Converte 'DD/MM/YYYY HH:MM' (UTC da API) para ISO com timezone UTC."""
+    if not dt_str or len(dt_str) < 16:
+        return None
+    try:
+        dt = datetime.strptime(dt_str.strip(), "%d/%m/%Y %H:%M")
+        return dt.replace(tzinfo=timezone.utc).isoformat()
+    except Exception:
+        return None
+
+
+def parse_hora(dt_str: str) -> str | None:
+    """Extrai HH:MM:00 de 'DD/MM/YYYY HH:MM'."""
+    if not dt_str or len(dt_str) < 16:
+        return None
+    try:
+        return dt_str.strip()[11:16] + ":00"
+    except Exception:
+        return None
+
+
 # ── Busca voos no SIROS ───────────────────────────────────────────────────────
 
 def buscar_voos_siros() -> list:
