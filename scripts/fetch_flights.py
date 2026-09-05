@@ -106,8 +106,34 @@ def parse_hora(dt_str: str) -> str | None:
         return None
 
 
-# ── Busca voos no SIROS ───────────────────────────────────────────────────────
+# ── Deduplicação ──────────────────────────────────────────────────────────────
+ 
+def deduplicar(lista: list) -> list:
+    """
+    Remove registros duplicados com base na chave do constraint voos_unique.
+    Necessário porque a API SIROS pode retornar o mesmo voo mais de uma vez
+    no mesmo response, causando erro PostgreSQL 21000 no upsert:
+    'ON CONFLICT DO UPDATE command cannot affect row a second time'
+    """
+    seen   = set()
+    result = []
+    for r in lista:
+        key = (
+            r.get("data_referencia"),
+            r.get("icao_empresa"),
+            r.get("numero_voo"),
+            r.get("icao_origem"),
+            r.get("icao_destino"),
+            r.get("etapa"),
+        )
+        if key not in seen:
+            seen.add(key)
+            result.append(r)
+    return result 
 
+
+# ── Busca voos no SIROS ───────────────────────────────────────────────────────
+ 
 def buscar_voos_siros() -> list:
     url = f"{API_BASE}/voos"
     print(f"\nGET {url}?dataReferencia={data_ref}")
@@ -125,20 +151,20 @@ def buscar_voos_siros() -> list:
     except Exception as e:
         print(f"  [ERRO] Falha ao buscar voos no SIROS: {e}")
         return []
-
-
+ 
+ 
 def normalizar_voo(f: dict) -> dict:
-    empresa = (f.get("sg_empresa_icao")          or "").strip()
-    nr_voo  = (f.get("nr_voo")                   or "").strip().lstrip("0") or "0"
-    etapa   = str(f.get("nr_etapa")              or "1").strip()
-    equip   = (f.get("sg_equipamento_icao")       or "").strip()
+    empresa = (f.get("sg_empresa_icao")         or "").strip()
+    nr_voo  = (f.get("nr_voo")                  or "").strip().lstrip("0") or "0"
+    etapa   = str(f.get("nr_etapa")             or "1").strip()
+    equip   = (f.get("sg_equipamento_icao")      or "").strip()
     assent  = f.get("qt_assentos_previstos")
     partida = (f.get("dt_partida_prevista_utc")  or "").strip()
     chegada = (f.get("dt_chegada_prevista_utc")  or "").strip()
-    tipo    = (f.get("ds_tipo_servico")           or "").strip()
-    origem  = (f.get("sg_icao_origem")            or "").strip().upper()
-    destino = (f.get("sg_icao_destino")           or "").strip().upper()
-
+    tipo    = (f.get("ds_tipo_servico")          or "").strip()
+    origem  = (f.get("sg_icao_origem")           or "").strip().upper()
+    destino = (f.get("sg_icao_destino")          or "").strip().upper()
+ 
     return {
         "data_referencia": data_iso,
         "icao_empresa":    empresa or None,
@@ -156,8 +182,8 @@ def normalizar_voo(f: dict) -> dict:
         "tipo_operacao":   get_tipo_operacao(tipo),
         "tipo_servico":    tipo or None,
     }
-
-
+ 
+ 
 def registrar_execucao(
     aeroportos: list,
     voos_processados: int,
@@ -180,18 +206,18 @@ def registrar_execucao(
         print(f"\n  Log de execução salvo — status: {status}")
     except Exception as e:
         print(f"  [AVISO] Não foi possível salvar o log de execução: {e}")
-
+ 
 
 # ── Execução principal ────────────────────────────────────────────────────────
-
+ 
 todos_voos = buscar_voos_siros()
-
+ 
 if not todos_voos:
     print("\n[AVISO] Nenhum voo retornado pela API SIROS. Encerrando.")
     registrar_execucao(AIRPORTS, 0, 0, 0, "sem_dados",
                        "API SIROS não retornou voos para a data.")
     sys.exit(0)
-
+ 
 # Filtra pelos aeroportos configurados e normaliza os registros
 registros = []
 for f in todos_voos:
@@ -204,41 +230,28 @@ for f in todos_voos:
     if not empresa or not nr_voo or not origem or not destino:
         continue
     registros.append(normalizar_voo(f))
-
+ 
 print(f"\nRegistros filtrados para os aeroportos configurados: {len(registros)}")
-
-# Remove duplicados que quebram o upsert
-registros_unicos = {}
-
-for r in registros:
-    chave = (
-        r["data_referencia"],
-        r["icao_empresa"],
-        r["numero_voo"],
-        r["icao_origem"],
-        r["icao_destino"],
-        r["etapa"],
-    )
-
-    registros_unicos[chave] = r
-
-duplicados_removidos = len(registros) - len(registros_unicos)
-registros = list(registros_unicos.values())
-
-print(f"Duplicados removidos: {duplicados_removidos}")
-print(f"Registros únicos: {len(registros)}")
-
+ 
+# Deduplicação: remove registros com a mesma chave única antes do envio
+# Evita erro PostgreSQL 21000 causado por duplicatas internas da API SIROS
+antes     = len(registros)
+registros = deduplicar(registros)
+removidos = antes - len(registros)
+if removidos:
+    print(f"  Deduplicação: {removidos} registro(s) duplicado(s) removido(s) antes do envio")
+ 
 print(
     "  Obs: o upsert usa constraint voos_unique "
     "(data_referencia + icao_empresa + numero_voo + icao_origem + icao_destino + etapa). "
     "Voos já existentes são atualizados — sem duplicatas."
 )
-
+ 
 # Envio em lotes ao Supabase
 total_processados = 0
 total_lotes       = 0
 total_erros       = 0
-
+ 
 for i in range(0, len(registros), LOTE):
     lote     = registros[i:i + LOTE]
     num_lote = i // LOTE + 1
@@ -253,7 +266,7 @@ for i in range(0, len(registros), LOTE):
     except Exception as e:
         total_erros += 1
         print(f"  [ERRO] Lote {num_lote} falhou: {e}")
-
+ 
 # Define status final
 if total_erros == 0:
     status_final = "concluido"
@@ -261,17 +274,18 @@ elif total_processados > 0:
     status_final = "erro_parcial"
 else:
     status_final = "erro_critico"
-
+ 
 obs = (
     f"Data: {data_iso} | Aeroportos: {', '.join(AIRPORTS)} | "
     f"Processados: {total_processados} | Lotes: {total_lotes} | Erros: {total_erros}"
 )
-
+ 
 registrar_execucao(
     AIRPORTS, total_processados, total_lotes, total_erros, status_final, obs
 )
-
+ 
 print(f"\nConcluído — {total_processados} registros enviados/processados em {total_lotes} lote(s).")
+
 
 # Falha o workflow se houver qualquer erro parcial
 # (permite que o GitHub Actions marque o run como falha para monitoramento)
